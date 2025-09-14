@@ -10,6 +10,61 @@ import jraph
 
 from nequix.layer_norm import RMSLayerNorm
 
+# Covalent radii in angstroms. Original values (in nm) from
+# https://doi.org/10.1063/1.1725697 converted to Å.
+_COVALENT_RADII_NM = {
+    1: 0.025,
+    3: 0.145,
+    4: 0.105,
+    5: 0.085,
+    6: 0.07,
+    7: 0.065,
+    8: 0.06,
+    9: 0.05,
+    11: 0.18,
+    12: 0.15,
+    13: 0.125,
+    14: 0.11,
+    15: 0.1,
+    16: 0.1,
+    17: 0.1,
+    19: 0.22,
+    20: 0.18,
+    21: 0.16,
+    22: 0.14,
+    23: 0.135,
+    24: 0.14,
+    25: 0.14,
+    26: 0.14,
+    27: 0.135,
+    28: 0.135,
+    29: 0.135,
+    30: 0.135,
+    31: 0.13,
+    32: 0.125,
+    33: 0.115,
+    34: 0.115,
+    35: 0.115,
+    37: 0.235,
+    38: 0.2,
+    39: 0.18,
+    40: 0.155,
+    41: 0.145,
+    42: 0.145,
+    43: 0.135,
+    44: 0.13,
+    45: 0.135,
+    46: 0.14,
+    47: 0.16,
+    48: 0.155,
+    49: 0.155,
+    50: 0.145,
+    51: 0.145,
+    52: 0.14,
+    53: 0.14,
+}
+COVALENT_RADII = {k: v * 10.0 for k, v in _COVALENT_RADII_NM.items()}
+
 
 def bessel_basis(x: jax.Array, num_basis: int, r_max: float) -> jax.Array:
     prefactor = 2.0 / r_max
@@ -30,6 +85,44 @@ def polynomial_cutoff(x: jax.Array, r_max: float, p: float) -> jax.Array:
     out = out + (p * (p + 2.0) * jnp.power(x, p + 1.0))
     out = out - ((p * (p + 1.0) / 2) * jnp.power(x, p + 2.0))
     return out * jnp.where(x < 1.0, 1.0, 0.0)
+
+
+def zbl_pair_energy(r: jax.Array, z1: jax.Array, z2: jax.Array, cutoff: jax.Array) -> jax.Array:
+    """Compute the ZBL repulsive potential for a pair of atoms.
+
+    Parameters
+    ----------
+    r : jax.Array
+        Distance between atoms in Å.
+    z1, z2 : jax.Array
+        Atomic numbers of the two atoms.
+    cutoff : jax.Array
+        Cutoff radius (sum of covalent radii) in Å.
+
+    Returns
+    -------
+    jax.Array
+        Repulsive energy in eV.
+    """
+    # Prevent division by zero for coincident atoms
+    r = jnp.where(r > 0.0, r, 1e-12)
+
+    a0 = 0.529177210903  # Bohr radius in Å
+    a = 0.8854 * a0 / (jnp.power(z1, 0.23) + jnp.power(z2, 0.23))
+    d = r / a
+    screening = (
+        0.1818 * jnp.exp(-3.2 * d)
+        + 0.5099 * jnp.exp(-0.9423 * d)
+        + 0.2802 * jnp.exp(-0.4029 * d)
+        + 0.02817 * jnp.exp(-0.2016 * d)
+    )
+    ke = 14.399652  # 1/(4*pi*eps0) in eV*Å
+    energy = ke * z1 * z2 / r * screening
+
+    phi = jnp.where(
+        r < cutoff, 0.5 * (jnp.cos(jnp.pi * r / cutoff) + 1.0), 0.0
+    )
+    return energy * phi
 
 
 class Linear(eqx.Module):
@@ -213,6 +306,8 @@ class Nequix(eqx.Module):
     cutoff: float = eqx.field(static=True)
     shift: float = eqx.field(static=True)
     scale: float = eqx.field(static=True)
+    atomic_numbers: jax.Array = eqx.field(static=True)
+    covalent_radii: jax.Array = eqx.field(static=True)
 
     atom_energies: jax.Array
     layers: list[NequixConvolution]
@@ -221,7 +316,7 @@ class Nequix(eqx.Module):
     def __init__(
         self,
         key,
-        n_species,
+        atomic_numbers: Sequence[int],
         lmax: int = 3,
         cutoff: float = 5.0,
         hidden_irreps: str = "128x0e + 128x1o + 128x2e + 128x3o",
@@ -238,6 +333,7 @@ class Nequix(eqx.Module):
         atom_energies: Optional[Sequence[float]] = None,
         layer_norm: bool = False,
     ):
+        n_species = len(atomic_numbers)
         self.lmax = lmax
         self.cutoff = cutoff
         self.n_species = n_species
@@ -245,6 +341,10 @@ class Nequix(eqx.Module):
         self.radial_polynomial_p = radial_polynomial_p
         self.shift = shift
         self.scale = scale
+        self.atomic_numbers = jnp.array(atomic_numbers, dtype=jnp.float32)
+        self.covalent_radii = jnp.array(
+            [COVALENT_RADII[n] for n in atomic_numbers], dtype=jnp.float32
+        )
         self.atom_energies = (
             jnp.array(atom_energies)
             if atom_energies is not None
@@ -358,6 +458,23 @@ class Nequix(eqx.Module):
             node_energies = self.node_energies(
                 r, data.nodes["species"], data.senders, data.receivers
             )
+
+            z1 = self.atomic_numbers[data.nodes["species"][data.senders]]
+            z2 = self.atomic_numbers[data.nodes["species"][data.receivers]]
+            r1 = self.covalent_radii[data.nodes["species"][data.senders]]
+            r2 = self.covalent_radii[data.nodes["species"][data.receivers]]
+            r_norm = jnp.linalg.norm(r, axis=-1)
+            edge_energy = zbl_pair_energy(r_norm, z1, z2, r1 + r2)
+            edge_mask = jraph.get_edge_padding_mask(data)
+            edge_energy = jnp.where(edge_mask, edge_energy, 0.0)
+
+            num_nodes = node_energies.shape[0]
+            node_zbl = (
+                jraph.segment_sum(edge_energy, data.senders, num_segments=num_nodes)
+                + jraph.segment_sum(edge_energy, data.receivers, num_segments=num_nodes)
+            ) * 0.5
+            node_energies = node_energies + node_zbl[:, None]
+
             return jnp.sum(node_energies), node_energies
 
         eps = jnp.zeros_like(data.globals["cell"])
@@ -437,7 +554,7 @@ def load_model(path: str) -> tuple[Nequix, dict]:
         config = json.loads(f.readline().decode())
         model = Nequix(
             key=jax.random.key(0),
-            n_species=len(config["atomic_numbers"]),
+            atomic_numbers=config["atomic_numbers"],
             hidden_irreps=config["hidden_irreps"],
             lmax=config["lmax"],
             cutoff=config["cutoff"],

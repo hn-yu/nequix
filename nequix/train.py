@@ -227,7 +227,7 @@ def train(config_path: str):
     key = jax.random.key(0)
     model = Nequix(
         key,
-        n_species=len(config["atomic_numbers"]),
+        atomic_numbers=config["atomic_numbers"],
         hidden_irreps=config["hidden_irreps"],
         lmax=config["lmax"],
         cutoff=config["cutoff"],

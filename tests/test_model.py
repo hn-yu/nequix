@@ -42,7 +42,7 @@ def test_model():
     # small model for testing
     model = Nequix(
         key,
-        n_species=2,
+        atomic_numbers=[1, 6],
         lmax=1,
         hidden_irreps="8x0e+8x1o",
         n_layers=2,
@@ -110,7 +110,7 @@ def test_model_save_load():
     atom_energies = [config["atom_energies"][n] for n in config["atomic_numbers"]]
     model = Nequix(
         key,
-        n_species=len(config["atomic_numbers"]),
+        atomic_numbers=config["atomic_numbers"],
         cutoff=config["cutoff"],
         lmax=config["lmax"],
         hidden_irreps=config["hidden_irreps"],
@@ -155,7 +155,7 @@ def test_weight_decay_mask():
     key = jax.random.key(0)
     model = Nequix(
         key,
-        n_species=2,
+        atomic_numbers=[1, 6],
         lmax=1,
         hidden_irreps="8x0e+8x1o",
         n_layers=2,
