@@ -10,10 +10,11 @@ import jraph
 
 from nequix.layer_norm import RMSLayerNorm
 
-# Covalent radii in angstroms. Original values (in nm) from
-# https://doi.org/10.1063/1.1725697 converted to Å.
+# Covalent radii in nanometers. Values are converted to Å below.
+# Data originally from https://doi.org/10.1063/1.1725697.
 _COVALENT_RADII_NM = {
     1: 0.025,
+    2: 0.028,
     3: 0.145,
     4: 0.105,
     5: 0.085,
@@ -21,6 +22,7 @@ _COVALENT_RADII_NM = {
     7: 0.065,
     8: 0.06,
     9: 0.05,
+    10: 0.058,
     11: 0.18,
     12: 0.15,
     13: 0.125,
@@ -28,6 +30,7 @@ _COVALENT_RADII_NM = {
     15: 0.1,
     16: 0.1,
     17: 0.1,
+    18: 0.106,
     19: 0.22,
     20: 0.18,
     21: 0.16,
@@ -45,6 +48,7 @@ _COVALENT_RADII_NM = {
     33: 0.115,
     34: 0.115,
     35: 0.115,
+    36: 0.116,
     37: 0.235,
     38: 0.2,
     39: 0.18,
@@ -62,6 +66,47 @@ _COVALENT_RADII_NM = {
     51: 0.145,
     52: 0.14,
     53: 0.14,
+    54: 0.14,
+    55: 0.244,
+    56: 0.215,
+    57: 0.207,
+    58: 0.204,
+    59: 0.203,
+    60: 0.201,
+    61: 0.199,
+    62: 0.198,
+    63: 0.198,
+    64: 0.196,
+    65: 0.194,
+    66: 0.192,
+    67: 0.192,
+    68: 0.189,
+    69: 0.19,
+    70: 0.187,
+    71: 0.187,
+    72: 0.175,
+    73: 0.17,
+    74: 0.162,
+    75: 0.151,
+    76: 0.144,
+    77: 0.141,
+    78: 0.136,
+    79: 0.136,
+    80: 0.132,
+    81: 0.145,
+    82: 0.146,
+    83: 0.148,
+    84: 0.14,
+    85: 0.15,
+    86: 0.15,
+    87: 0.26,
+    88: 0.221,
+    89: 0.215,
+    90: 0.206,
+    91: 0.2,
+    92: 0.196,
+    93: 0.19,
+    94: 0.187,
 }
 COVALENT_RADII = {k: v * 10.0 for k, v in _COVALENT_RADII_NM.items()}
 
@@ -119,9 +164,7 @@ def zbl_pair_energy(r: jax.Array, z1: jax.Array, z2: jax.Array, cutoff: jax.Arra
     ke = 14.399652  # 1/(4*pi*eps0) in eV*Å
     energy = ke * z1 * z2 / r * screening
 
-    phi = jnp.where(
-        r < cutoff, 0.5 * (jnp.cos(jnp.pi * r / cutoff) + 1.0), 0.0
-    )
+    phi = jnp.where(r < cutoff, 0.5 * (jnp.cos(jnp.pi * r / cutoff) + 1.0), 0.0)
     return energy * phi
 
 
@@ -342,6 +385,9 @@ class Nequix(eqx.Module):
         self.shift = shift
         self.scale = scale
         self.atomic_numbers = jnp.array(atomic_numbers, dtype=jnp.float32)
+        missing = [n for n in atomic_numbers if n not in COVALENT_RADII]
+        if missing:
+            raise ValueError(f"Missing covalent radius for atomic number(s): {missing}")
         self.covalent_radii = jnp.array(
             [COVALENT_RADII[n] for n in atomic_numbers], dtype=jnp.float32
         )
